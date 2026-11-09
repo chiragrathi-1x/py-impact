@@ -28,7 +28,9 @@ pip install .
 To analyze a project and see what calls a specific function:
 
 ```bash
-py-impact analyze ./src --target utils.py:42
+py-impact analyze ./src --target my_module.my_func
+# OR by file and line
+py-impact analyze ./src --target src/utils.py:42
 ```
 
 To find all unused functions (orphans):
@@ -43,27 +45,27 @@ To identify the most heavily depended-upon functions:
 py-impact hotspots ./src --limit 10
 ```
 
-## CLI Usage
+To export a graph for Graphviz visualization:
 
-- `analyze <path>`: Build the call graph and query specific impact points.
-- `orphans <path>`: List all defined symbols that have no internal callers.
-- `hotspots <path>`: List symbols with the highest incoming edge count.
-- `graph <path>`: Export the project structure to a graph format.
+```bash
+py-impact graph ./src --output project_graph.dot
+dot -Tpng project_graph.dot -o graph.png
+```
+
+## CLI Commands
+
+- `analyze <path>`: Build the call graph and query specific impact points. Use `--target` with an FQN or `path:line`.
+- `orphans <path>`: List all defined symbols (functions/classes) that have no internal callers.
+- `hotspots <path>`: List symbols with the highest incoming edge count (most depended upon).
+- `graph <path>`: Export the project structure to DOT or JSON formats.
 
 ## Limitations
 
 - **Static Analysis**: PyImpact uses the Abstract Syntax Tree (AST). It cannot resolve dynamic calls made via `getattr()`, `setattr()`, or string-based imports (e.g., `importlib.import_module`).
-- **Type Hinting**: While it leverages type hints where available for better resolution, it does not perform full runtime type inference.
-- **External Libraries**: PyImpact focuses on the internal project scope. Calls to third-party libraries are acknowledged but not recursively mapped unless the source is provided in the analysis path.
-
-## Contributing
-
-Contributions are welcome! Please ensure that any new features include corresponding test cases in the `tests/` directory. PyImpact aims to maintain high coverage of edge cases, including nested functions, decorators, and circular imports.
-
-1. Fork the repository.
-2. Create a feature branch.
-3. Submit a Pull Request with a clear description of the change.
+- **Type Hinting**: While it leverages type hints where available, it does not perform full runtime type inference.
+- **External Libraries**: PyImpact focuses on the internal project scope. Calls to third-party libraries (e.g., `requests.get`) are acknowledged but not recursively mapped unless their source code is included in the analysis path.
+- **Star Imports**: `from module import *` is not supported as it obscures symbol origins during static analysis.
 
 ## License
 
-This project is intended for open-source use. See the project repository for licensing details.
+MIT License. See `LICENSE` for details.

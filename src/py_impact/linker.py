@@ -1,6 +1,6 @@
 import ast
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 from .models import ProjectGraph, Symbol
 from .parser import ImportResolver
 
@@ -18,48 +18,65 @@ class CallLinker(ast.NodeVisitor):
         self.scope_stack: List[str] = [module_fqn]
 
     def visit_ClassDef(self, node: ast.ClassDef):
-        self.scope_stack.append(f"{self.scope_stack[-1]}.{node.name}")
+        fqn = f"{self.scope_stack[-1]}.{node.name}"
+        self.scope_stack.append(fqn)
         self.generic_visit(node)
         self.scope_stack.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
-        self.scope_stack.append(f"{self.scope_stack[-1]}.{node.name}")
+        fqn = f"{self.scope_stack[-1]}.{node.name}"
+        self.scope_stack.append(fqn)
         self.generic_visit(node)
         self.scope_stack.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
-        self.scope_stack.append(f"{self.scope_stack[-1]}.{node.name}")
+        fqn = f"{self.scope_stack[-1]}.{node.name}"
+        self.scope_stack.append(fqn)
         self.generic_visit(node)
         self.scope_stack.pop()
 
     def visit_Call(self, node: ast.Call):
         callee_fqn = self._resolve_name(node.func)
         if callee_fqn and callee_fqn in self.graph.symbols:
-            # Link current scope to the target
             caller = self.scope_stack[-1]
             self.graph.add_edge(caller, callee_fqn, node.lineno)
         self.generic_visit(node)
 
-    def _resolve_name(self, node: ast.AST) -> str | None:
-        """Attempts to find the FQN of a call target."""
+    def _resolve_name(self, node: ast.AST) -> Optional[str]:
+        """Attempts to find the FQN of a call target using scope-aware resolution."""
         if isinstance(node, ast.Name):
-            # Local lookup or imported lookup
             name = node.id
-            # 1. Is it imported?
+            # 1. Check imports
             if name in self.import_map:
                 return self.import_map[name]
-            # 2. Is it in the same module?
-            local_fqn = f"{self.module_fqn}.{name}"
-            if local_fqn in self.graph.symbols:
-                return local_fqn
-            # 3. Is it inside a class (if we are in a class)?
-            # Simplification: we don't handle 'self.' resolution deeply here,
-            # but we can resolve simple calls within the same module.
+            
+            # 2. Traverse scope stack from innermost outwards
+            for scope_fqn in reversed(self.scope_stack):
+                target = f"{scope_fqn}.{name}"
+                if target in self.graph.symbols:
+                    return target
+            
+            # 3. Fallback to module scope if not in stack explicitly
+            mod_target = f"{self.module_fqn}.{name}"
+            if mod_target in self.graph.symbols:
+                return mod_target
         
         elif isinstance(node, ast.Attribute):
-            # Handle Class.method or module.function
+            # Handle instance method calls: self.method()
+            if isinstance(node.value, ast.Name) and node.value.id == "self":
+                for scope_fqn in reversed(self.scope_stack):
+                    sym = self.graph.symbols.get(scope_fqn)
+                    if sym and sym.type == 'class':
+                        target = f"{scope_fqn}.{node.attr}"
+                        if target in self.graph.symbols:
+                            return target
+                return None
+
+            # Handle Class.method or module.function recursively
             value_fqn = self._resolve_name(node.value)
             if value_fqn:
-                return f"{value_fqn}.{node.attr}"
+                target = f"{value_fqn}.{node.attr}"
+                if target in self.graph.symbols:
+                    return target
         
         return None

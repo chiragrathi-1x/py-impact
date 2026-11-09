@@ -3,17 +3,17 @@ import logging
 from pathlib import Path
 from typing import List, Set, Dict, Optional
 from .models import ProjectGraph, Symbol
-from .parser import DefinitionCrawler, ImportResolver, get_module_fqn
+from .parser import DefinitionCrawler, ImportResolver, get_module_fqn, find_source_root
 from .linker import CallLinker
 
 logger = logging.getLogger(__name__)
 
 class Analyzer:
-    def __init__(self, root_dir: Path, exclude_patterns: List[str] = None):
-        self.root_dir = root_dir.resolve()
+    def __init__(self, search_path: Path, exclude_patterns: List[str] = None):
+        self.search_path = search_path.resolve()
+        self.source_root = find_source_root(self.search_path)
         self.exclude_patterns = exclude_patterns or []
         self.graph = ProjectGraph()
-        # Maps module_fqn -> dict of imports
         self.module_imports: Dict[str, Dict[str, str]] = {}
 
     def _should_exclude(self, path: Path) -> bool:
@@ -22,22 +22,20 @@ class Analyzer:
 
     def run(self):
         """Executes the multi-pass analysis."""
-        py_files = [p for p in self.root_dir.rglob("*.py") if not self._should_exclude(p)]
+        py_files = [p for p in self.search_path.rglob("*.py") if not self._should_exclude(p)]
 
         # Pass 1: Crawl definitions
         for py_file in py_files:
             try:
                 content = py_file.read_text(encoding="utf-8")
                 tree = ast.parse(content)
-                mod_fqn = get_module_fqn(self.root_dir, py_file)
+                mod_fqn = get_module_fqn(self.source_root, py_file)
                 
-                # Index symbols
                 crawler = DefinitionCrawler(py_file, mod_fqn)
                 crawler.visit(tree)
                 for sym in crawler.symbols:
                     self.graph.add_symbol(sym)
                 
-                # Index imports for Pass 2
                 importer = ImportResolver(mod_fqn)
                 importer.visit(tree)
                 self.module_imports[mod_fqn] = importer.imports
@@ -47,7 +45,7 @@ class Analyzer:
 
         # Pass 2: Link calls
         for py_file in py_files:
-            mod_fqn = get_module_fqn(self.root_dir, py_file)
+            mod_fqn = get_module_fqn(self.source_root, py_file)
             if mod_fqn not in self.module_imports:
                 continue
             
@@ -80,21 +78,23 @@ class Analyzer:
                 if p not in visited:
                     to_visit.append(p)
         
-        # Remove the target itself from the result
         visited.discard(target_fqn)
         return visited
 
     def get_orphans(self) -> List[Symbol]:
-        """Symbols with no incoming edges from within the project."""
+        """Symbols with no incoming edges, excluding common entry points."""
         orphans = []
+        entry_points = {"main", "__init__"}
+        
         for fqn, sym in self.graph.symbols.items():
-            # We exclude modules themselves and only look at functions/classes
-            # Also exclude __init__ or common entry points if desired, 
-            # but here we follow strict 0-incoming rule.
-            if fqn not in self.graph.incoming:
-                # Only count symbols that aren't modules
-                if sym.type in ('function', 'class'):
-                    orphans.append(sym)
+            if sym.type not in ('function', 'class'):
+                continue
+            
+            if sym.name in entry_points:
+                continue
+
+            if fqn not in self.graph.incoming or not self.graph.incoming[fqn]:
+                orphans.append(sym)
         return orphans
 
     def get_hotspots(self, limit: int = 10) -> List[tuple[str, int]]:

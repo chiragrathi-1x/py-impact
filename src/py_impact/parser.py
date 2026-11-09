@@ -36,10 +36,10 @@ class DefinitionCrawler(ast.NodeVisitor):
         fqn = f"{self.scope_stack[-1]}.{node.name}"
         self.symbols.append(Symbol(
             fqn=fqn,
-            name=node.name,
+            name=getattr(node, 'name', 'unknown'),
             file_path=self.file_path,
             line_start=node.lineno,
-            line_end=node.end_lineno or node.lineno,
+            line_end=getattr(node, 'end_lineno', node.lineno),
             type='function',
             parent_fqn=self.scope_stack[-1] if len(self.scope_stack) > 1 else None
         ))
@@ -74,11 +74,35 @@ class ImportResolver(ast.NodeVisitor):
                 continue # Star imports are hard for static analysis
             self.imports[name] = f"{module}.{alias.name}"
 
+def find_source_root(path: Path) -> Path:
+    """
+    Detects the package root by looking for the highest directory containing an __init__.py.
+    Returns the parent of that directory, or the provided path if no __init__.py is found.
+    """
+    current = path.resolve()
+    if current.is_file():
+        current = current.parent
+    
+    highest_pkg = None
+    probe = current
+    while (probe / "__init__.py").exists():
+        highest_pkg = probe
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+        
+    return highest_pkg.parent if highest_pkg else current
+
 def get_module_fqn(root: Path, file_path: Path) -> str:
-    """Converts a file path to a dot-notation module name."""
+    """Converts a file path to a dot-notation module name relative to the source root."""
     try:
-        relative = file_path.resolve().relative_to(root.resolve())
+        # Ensure we use absolute paths for relative_to
+        root_abs = root.resolve()
+        file_abs = file_path.resolve()
+        relative = file_abs.relative_to(root_abs)
         parts = list(relative.parts)
+        if not parts:
+            return file_abs.stem
         if parts[-1] == "__init__.py":
             parts.pop()
         else:

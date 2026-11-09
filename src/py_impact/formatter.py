@@ -2,22 +2,30 @@ import json
 from typing import List, Set, Dict
 from .models import ProjectGraph, Symbol
 
-def format_tree(graph: ProjectGraph, start_fqn: str, visited: Set[str] = None, indent: int = 0) -> str:
-    """Generates a visual tree string of callers (upstream)."""
-    if visited is None:
-        visited = set()
+def format_tree(graph: ProjectGraph, start_fqn: str) -> str:
+    """Generates a visual tree string of callers (upstream) iteratively to avoid recursion limits."""
+    lines = []
+    # Stack stores (fqn, depth)
+    stack = [(start_fqn, 0)]
+    visited = set()
     
-    res = "  " * indent + f"- {start_fqn}\n"
-    visited.add(start_fqn)
-    
-    parents = graph.incoming.get(start_fqn, set())
-    for p in sorted(parents):
-        if p not in visited:
-            res += format_tree(graph, p, visited, indent + 1)
-        else:
-            res += "  " * (indent + 1) + f"- {p} (circular)\n"
+    while stack:
+        curr_fqn, depth = stack.pop()
+        indent = "  " * depth
+        
+        if curr_fqn in visited:
+            lines.append(f"{indent}- {curr_fqn} (already visited)")
+            continue
             
-    return res
+        lines.append(f"{indent}- {curr_fqn}")
+        visited.add(curr_fqn)
+        
+        parents = graph.incoming.get(curr_fqn, set())
+        # Sort reversed for alphabetical popping order
+        for p in sorted(parents, reverse=True):
+            stack.append((p, depth + 1))
+            
+    return "\n".join(lines) + "\n"
 
 def export_dot(graph: ProjectGraph) -> str:
     """Generates DOT format for Graphviz."""
